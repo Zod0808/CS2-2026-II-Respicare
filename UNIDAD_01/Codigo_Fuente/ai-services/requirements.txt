@@ -1,0 +1,51 @@
+# FastAPI and web framework
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+aiofiles==25.1.0
+
+# AI/ML libraries - versions compatible
+openai==1.55.3
+scikit-learn==1.5.2
+numpy==1.26.4
+pandas==2.1.4
+xgboost==2.0.3
+joblib==1.4.2
+shap==0.44.0
+transformers==4.44.2
+Pillow==10.4.0
+
+# Medical text processing - SIN scispacy (problemas de compatibilidad con Python 3.11)
+spacy==3.6.1
+nltk==3.8.1
+# scispacy==0.5.3  # Comentado - nmslib no compila en Python 3.11
+
+# Database and caching
+pymongo==4.6.0
+redis==5.0.1
+motor==3.3.2
+
+# HTTP and utilities
+httpx==0.25.2
+aiohttp==3.9.1
+python-multipart==0.0.6
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Environment and configuration
+python-dotenv==1.0.0
+pydantic-settings==2.1.0
+
+# Logging and monitoring
+structlog==23.2.0
+sentry-sdk[fastapi]==1.38.0
+
+# Audio processing (pre-trained models, no dataset needed)
+librosa==0.10.1
+soundfile==0.12.1
+# openai-whisper: importado lazy en audio_transcription_service. Requiere pkg_resources
+# durante el build (incompatible con setuptools>=70 en env aislado de pip). No es esencial
+# para la demo (audio transcription es un feature secundario). Instalar manualmente si se
+# necesita:  docker exec respicare-ai-dev pip install openai-whisper==20240930 --no-build-isolation
+# openai-whisper==20240930
+ffmpeg-python==0.2.0

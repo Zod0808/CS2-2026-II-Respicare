@@ -1,0 +1,63 @@
+# ai-services coverage config
+#
+# Política de exclusiones (2026-07-15, honesta):
+#   1. Externos pesados: torch (medical_bert, image_classifier, lazy_loader),
+#      OpenAI (conversational_ai_service, cough_analysis_service,
+#      patient_friendly_explainer), sentry (utils/sentry_integration).
+#   2. Scripts / no-prod: organize_tests.py, ver_coverage.py, synthetic_*,
+#      train_*, time_series_predictor (dev exploration).
+#   3. Subproyectos con su propio suite: medical-history-processor/,
+#      symptom-analyzer/.
+#
+# Módulos NO excluidos aunque tengan cobertura baja (para dejarlos medibles):
+# routes/, repositories/, factories/, ml_models/{auto_retraining,
+# ensemble_predictor, hybrid_system, medical_feedback_system, xgboost_model,
+# random_forest_model, rl_reminder_optimizer, neural_network_model, nlp_advanced},
+# services/enhanced_chatbot_service, strategies/{analysis_strategy, rule_based_strategy}.
+# La política previa los excluía "porque los tests estaban rotos", inflando el
+# número reportado. Preferimos mostrar la deuda real (63.57% líneas).
+
+[run]
+source = .
+omit =
+    */tests/*
+    */test_*.py
+    */__pycache__/*
+    */venv/*
+    */env/*
+    */migrations/*
+    */node_modules/*
+    ml_models/lazy_loader.py
+    ml_models/medical_bert.py
+    ml_models/image_classifier.py
+    ml_models/synthetic_*.py
+    ml_models/train_*.py
+    ml_models/time_series_predictor.py
+    models/model_manager.py
+    models/__init__.py
+    medical-history-processor/*
+    symptom-analyzer/*
+    data/disease_parser.py
+    data/synthetic_*.py
+    services/conversational_ai_service.py
+    services/patient_friendly_explainer.py
+    services/cough_analysis_service.py
+    tests/performance/*
+    tests/security/*
+    organize_tests.py
+    ver_coverage.py
+    utils/sentry_integration.py
+    strategies/local_model_strategy.py
+
+[report]
+precision = 2
+show_missing = True
+skip_covered = False
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise AssertionError
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    @abstractmethod

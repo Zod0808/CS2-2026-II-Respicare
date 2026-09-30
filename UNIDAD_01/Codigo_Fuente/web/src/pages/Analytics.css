@@ -1,0 +1,194 @@
+.analytics-page {
+  min-height: 100vh;
+  background: #f8f9ff;
+}
+
+.analytics-header {
+  background: linear-gradient(135deg, #2196f3 0%, #1565c0 100%);
+  color: white;
+  padding: 40px 24px;
+  text-align: center;
+  box-shadow: 0 4px 20px rgba(33, 150, 243, 0.3);
+}
+
+.analytics-header h1 {
+  margin: 0 0 12px 0;
+  font-size: 2.5rem;
+  font-weight: bold;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.analytics-header p {
+  margin: 0;
+  font-size: 1.1rem;
+  opacity: 0.95;
+  font-weight: 500;
+}
+
+.analytics-tabs {
+  display: flex;
+  justify-content: center;
+  background: white;
+  border-bottom: 2px solid #e3f2fd;
+  padding: 0 24px;
+  gap: 0;
+  box-shadow: 0 2px 8px rgba(33, 150, 243, 0.1);
+}
+
+.tab-button {
+  padding: 16px 24px;
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  color: #666666;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+}
+
+.tab-button:hover {
+  color: #000000;
+  background: #f8f9ff;
+}
+
+.tab-button.active {
+  color: #1976d2;
+  border-bottom-color: #2196f3;
+  background: #f8f9ff;
+}
+
+.tab-button.active::after {
+  content: '';
+  position: absolute;
+  bottom: -3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 6px solid #2196f3;
+}
+
+.analytics-content {
+  padding: 24px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.tab-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 320px;
+  color: #1976d2;
+  font-weight: 500;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .analytics-header {
+    padding: 24px 16px;
+  }
+  
+  .analytics-header h1 {
+    font-size: 2rem;
+  }
+  
+  .analytics-header p {
+    font-size: 1rem;
+  }
+  
+  .analytics-tabs {
+    flex-direction: column;
+    padding: 0;
+  }
+  
+  .tab-button {
+    border-bottom: 1px solid #e3f2fd;
+    border-radius: 0;
+    text-align: left;
+  }
+  
+  .tab-button.active::after {
+    display: none;
+  }
+  
+  .analytics-content {
+    padding: 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .analytics-header h1 {
+    font-size: 1.8rem;
+  }
+
+  .tab-button {
+    padding: 12px 16px;
+    font-size: 0.9rem;
+  }
+}
+
+/* ── Dark mode ──────────────────────────────────────────────────── */
+.theme-dark .analytics-page,
+[data-theme="dark"] .analytics-page {
+  background: #0d1117;
+}
+
+.theme-dark .analytics-header,
+[data-theme="dark"] .analytics-header {
+  background: linear-gradient(135deg, #1565c0 0%, #0d47a1 100%);
+}
+
+.theme-dark .analytics-tabs,
+[data-theme="dark"] .analytics-tabs {
+  background: #1e2433;
+  border-bottom-color: rgba(255,255,255,0.08);
+}
+
+.theme-dark .tab-button,
+[data-theme="dark"] .tab-button {
+  color: rgba(255,255,255,0.6);
+}
+
+.theme-dark .tab-button:hover,
+[data-theme="dark"] .tab-button:hover {
+  color: rgba(255,255,255,0.87);
+  background: rgba(255,255,255,0.05);
+}
+
+.theme-dark .tab-button.active,
+[data-theme="dark"] .tab-button.active {
+  color: #90caf9;
+  border-bottom-color: #42a5f5;
+  background: rgba(33,150,243,0.08);
+}
+
+.theme-dark .tab-loading,
+[data-theme="dark"] .tab-loading {
+  color: #90caf9;
+}
+
+/*
+ * El área de contenido resetea las variables de color a valores light
+ * porque los sub-componentes de Analytics fueron diseñados para modo claro.
+ * Esto evita que texto blanco (dark mode) quede invisible sobre fondos blancos.
+ */
+.theme-dark .analytics-content,
+[data-theme="dark"] .analytics-content {
+  --color-text: rgba(0, 0, 0, 0.87);
+  --color-text-primary: rgba(0, 0, 0, 0.87);
+  --color-text-secondary: rgba(0, 0, 0, 0.6);
+  --color-background: #ffffff;
+  --color-background-paper: #f5f5f5;
+  --color-surface: #ffffff;
+  --color-bg-subtle: #f9fafb;
+  --color-divider: rgba(0, 0, 0, 0.12);
+  --color-border: rgba(0, 0, 0, 0.12);
+  background: #f0f4f8;
+  border-radius: 8px;
+  padding: 20px 24px;
+}

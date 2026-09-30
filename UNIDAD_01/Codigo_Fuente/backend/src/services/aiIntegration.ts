@@ -1,0 +1,575 @@
+/**
+ * Nombre de Objeto: aiIntegrationService (AIIntegrationService)
+ * Fecha de Creación: 2026-04-25
+ * Propietario: Cesar Fabian Chavez Linares
+ * Requerimiento: RF-002 - Diagnóstico inteligente de síntomas
+ * Descripción: Cliente HTTP hacia el servicio de IA (ai-services). Implementa
+ * analyzeSymptomsML() (predicción ML con ensemble+SHAP), un circuit breaker
+ * propio y wrappers de monitoreo (métricas, features, fairness) consumidos
+ * por analyticsRoutes (RF-006).
+ *
+ * AI Integration Service
+ * Connects with RespiCare AI Services for medical processing
+ */
+
+import axios, { AxiosInstance, AxiosResponse } from 'axios';
+import { config } from '../config/config';
+import { logger } from '../utils/logger';
+import { AppError } from '../utils/AppError';
+
+export interface SymptomVitalsInput {
+  heart_rate?: number;
+  oxygen_saturation?: number;
+  respiratory_rate?: number;
+}
+
+export interface AIAnalysisRequest {
+  patient_id: string;
+  text: string;
+  language?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface SymptomAnalysisRequest {
+  patient_id: string;
+  symptoms: Array<{
+    symptom: string;
+    severity: string;
+    duration: string;
+  }>;
+  context?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface AIAnalysisResponse {
+  patient_id: string;
+  processed_at: string;
+  entities: Array<{
+    text: string;
+    label: string;
+    start: number;
+    end: number;
+    confidence: number;
+  }>;
+  symptoms: Array<{
+    symptom: string;
+    category: string;
+    confidence: number;
+    context?: Record<string, any>;
+  }>;
+  diagnosis_suggestions: string[];
+  risk_factors: string[];
+  recommendations: string[];
+  confidence_score: number;
+  processing_time_ms: number;
+}
+
+export interface SymptomAnalysisResponse {
+  patient_id: string;
+  analyzed_at: string;
+  urgency_level: string;
+  severity_score: number;
+  classification: {
+    urgency: string;
+    severity_score: number;
+    recommendation: string;
+    categories: string[];
+    confidence: number;
+  };
+  recommendations: string[];
+  warning_signs: string[];
+  follow_up_required: boolean;
+  confidence_score: number;
+  processing_time_ms: number;
+}
+
+export interface MLPredictionResponse {
+  disease: string;
+  confidence: number;
+  urgency_level: string;
+  explanation?: {
+    method: string;
+    models_used?: string[];
+    description?: string;
+    positive_factors?: Array<{
+      feature_index: number;
+      shap_value: number;
+      feature_importance: number;
+    }>;
+    negative_factors?: Array<{
+      feature_index: number;
+      shap_value: number;
+      feature_importance: number;
+    }>;
+    decision_factors?: Array<{
+      feature_index: number;
+      shap_value: number;
+      feature_importance: number;
+    }>;
+    explainability_score: number;
+  };
+  top_3_predictions: Array<{
+    disease: string;
+    confidence: string;
+  }>;
+  needs_medical_attention: boolean;
+  age_group?: string;
+  risk_level?: string;
+  personalized_recommendations?: string[];
+  is_clinically_coherent?: boolean;
+  coherence_warnings?: string[];
+  timestamp: string;
+}
+
+type CircuitState = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+const CB_FAILURE_THRESHOLD = 5;   // failures before opening
+const CB_RECOVERY_MS       = 30_000; // time in OPEN before trying HALF_OPEN
+
+class AIIntegrationService {
+  private aiClient: AxiosInstance;
+  private isConnected: boolean = false;
+
+  private cbState: CircuitState = 'CLOSED';
+  private cbFailures: number = 0;
+  private cbOpenedAt: number = 0;
+
+  private recordSuccess(): void {
+    this.cbFailures = 0;
+    this.cbState = 'CLOSED';
+  }
+
+  private recordFailure(): void {
+    this.cbFailures++;
+    if (this.cbState === 'HALF_OPEN' || this.cbFailures >= CB_FAILURE_THRESHOLD) {
+      this.cbState = 'OPEN';
+      this.cbOpenedAt = Date.now();
+      logger.warn('🔴 Circuit breaker AI Service ABIERTO — pausando solicitudes', { failures: this.cbFailures });
+    }
+  }
+
+  private isCircuitOpen(): boolean {
+    if (this.cbState === 'CLOSED') return false;
+    if (this.cbState === 'OPEN') {
+      if (Date.now() - this.cbOpenedAt >= CB_RECOVERY_MS) {
+        this.cbState = 'HALF_OPEN';
+        logger.info('🟡 Circuit breaker AI Service HALF_OPEN — intentando recuperación');
+        return false;
+      }
+      return true;
+    }
+    return false; // HALF_OPEN → permit one probe
+  }
+
+  private async ensureConnected(): Promise<void> {
+    if (!this.isConnected) {
+      await this.checkHealth();
+      if (!this.isConnected) {
+        throw new AppError('AI Service no disponible', 503);
+      }
+    }
+  }
+
+  constructor() {
+    this.aiClient = axios.create({
+      baseURL: config.ai.serviceUrl,
+      timeout: 30000,
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'RespiCare-Backend/1.0.0'
+      }
+    });
+
+    this.setupInterceptors();
+  }
+
+  private setupInterceptors(): void {
+    // Request interceptor
+    this.aiClient.interceptors.request.use(
+      (config) => {
+        logger.debug('AI Service Request', {
+          method: config.method?.toUpperCase(),
+          url: config.url,
+          data: config.data ? 'Present' : 'None'
+        });
+        return config;
+      },
+      (error) => {
+        logger.error('AI Service Request Error', error);
+        return Promise.reject(error);
+      }
+    );
+
+    // Response interceptor
+    this.aiClient.interceptors.response.use(
+      (response: AxiosResponse) => {
+        logger.debug('AI Service Response', {
+          status: response.status,
+          url: response.config.url,
+          processingTime: response.headers['x-processing-time']
+        });
+        return response;
+      },
+      (error) => {
+        logger.error('AI Service Response Error', {
+          status: error.response?.status,
+          message: error.message,
+          url: error.config?.url
+        });
+        return Promise.reject(error);
+      }
+    );
+  }
+
+  /**
+   * Check if AI service is available
+   */
+  async checkHealth(): Promise<boolean> {
+    try {
+      const response = await this.aiClient.get('/api/v1/health');
+      this.isConnected = response.status === 200;
+      return this.isConnected;
+    } catch (error) {
+      logger.error('AI Service Health Check Failed', error);
+      this.isConnected = false;
+      return false;
+    }
+  }
+
+  /**
+   * Process medical history text with AI
+   */
+  async processMedicalHistory(request: AIAnalysisRequest): Promise<AIAnalysisResponse> {
+    if (this.isCircuitOpen()) {
+      throw new AppError('Servicio de IA temporalmente no disponible (circuit breaker)', 503);
+    }
+    try {
+      const response = await this.aiClient.post<AIAnalysisResponse>(
+        '/api/v1/medical-history/process',
+        request
+      );
+
+      this.recordSuccess();
+      logger.info('Medical history processed by AI', {
+        patientId: request.patient_id,
+        processingTime: response.data.processing_time_ms,
+        confidence: response.data.confidence_score
+      });
+
+      return response.data;
+    } catch (error: any) {
+      this.recordFailure();
+      logger.error('AI Medical History Processing Failed', {
+        patientId: request.patient_id,
+        error: error.message
+      });
+
+      if (error.response?.status === 503) {
+        throw new AppError('Servicio de IA temporalmente no disponible', 503);
+      } else if (error.response?.status === 400) {
+        throw new AppError('Datos de entrada inválidos para procesamiento de IA', 400);
+      } else {
+        throw new AppError('Error interno del servicio de IA', 500);
+      }
+    }
+  }
+
+  /**
+   * Analyze symptoms with AI (Legacy endpoint)
+   */
+  async analyzeSymptoms(request: SymptomAnalysisRequest): Promise<SymptomAnalysisResponse> {
+    if (this.isCircuitOpen()) {
+      throw new AppError('Servicio de IA temporalmente no disponible (circuit breaker)', 503);
+    }
+    try {
+      // Map structured symptoms to the ML endpoint's string-array format
+      const symptomNames = request.symptoms.map(s => s.symptom);
+
+      const mlResponse = await this.aiClient.post<{
+        disease: string;
+        confidence: number;
+        urgency_level: string;
+        needs_medical_attention: boolean;
+        personalized_recommendations?: string[];
+        risk_level?: string;
+        top_3_predictions?: Array<Record<string, string>>;
+        timestamp: string;
+      }>('/api/v1/ml-analyze', { symptoms: symptomNames });
+
+      const ml = mlResponse.data;
+
+      // Map ML output → SymptomAnalysisResponse shape expected by the frontend
+      const urgencyScoreMap: Record<string, number> = {
+        critical: 0.9, high: 0.7, medium: 0.5, moderate: 0.5, low: 0.3
+      };
+      const severityScore = urgencyScoreMap[ml.urgency_level?.toLowerCase()] ?? 0.5;
+
+      const mapped: SymptomAnalysisResponse = {
+        patient_id: request.patient_id?.toString() ?? '',
+        analyzed_at: ml.timestamp ?? new Date().toISOString(),
+        urgency_level: ml.urgency_level ?? 'low',
+        severity_score: severityScore,
+        classification: {
+          urgency: ml.urgency_level ?? 'low',
+          severity_score: severityScore,
+          recommendation: ml.personalized_recommendations?.[0] ?? `Posible diagnóstico: ${ml.disease}`,
+          categories: ml.top_3_predictions?.map(p => p.disease ?? '').filter(Boolean) ?? [ml.disease],
+          confidence: ml.confidence ?? 0.5,
+        },
+        recommendations: ml.personalized_recommendations ?? [`Consulta a un médico para evaluar ${ml.disease}`],
+        warning_signs: ml.needs_medical_attention ? ['Requiere atención médica inmediata'] : [],
+        follow_up_required: ml.needs_medical_attention ?? false,
+        confidence_score: ml.confidence ?? 0.5,
+        processing_time_ms: 0,
+      };
+
+      this.recordSuccess();
+      logger.info('Symptoms analyzed by AI', {
+        patientId: request.patient_id,
+        urgencyLevel: mapped.urgency_level,
+        disease: ml.disease,
+      });
+
+      return mapped;
+    } catch (error: any) {
+      this.recordFailure();
+      logger.error('AI Symptom Analysis Failed', {
+        patientId: request.patient_id,
+        error: error.message
+      });
+
+      if (error.response?.status === 503) {
+        throw new AppError('Servicio de IA temporalmente no disponible', 503);
+      } else if (error.response?.status === 400) {
+        throw new AppError('Datos de síntomas inválidos para análisis de IA', 400);
+      } else {
+        throw new AppError('Error interno del servicio de IA', 500);
+      }
+    }
+  }
+
+  /**
+   * Analyze symptoms with ML models (Ensemble + SHAP) - NEW
+   * Uses the complete ML system with ensemble, SHAP explanations, and personalization
+   */
+  async analyzeSymptomsML(request: {
+    symptoms: string[];
+    patient_age?: number;
+    risk_factors?: string[];
+    include_explanation?: boolean;
+    apply_personalization?: boolean;
+    patient_id?: string;
+    vitals?: SymptomVitalsInput;
+  }): Promise<MLPredictionResponse> {
+    try {
+      await this.ensureConnected();
+
+      const response = await this.aiClient.post<MLPredictionResponse>(
+        '/api/v1/ml-analyze',
+        {
+          symptoms: request.symptoms,
+          patient_age: request.patient_age || 35,
+          risk_factors: request.risk_factors || [],
+          include_explanation: request.include_explanation !== false, // default true
+          apply_personalization: request.apply_personalization !== false, // default true
+          // Sprint 13: vitales de wearables, opcionales (fallback automático si no hay datos)
+          ...(request.vitals ? { vitals: request.vitals } : {}),
+        },
+        {
+          params: {
+            use_ensemble: 'true' // Use ensemble by default
+          }
+        }
+      );
+
+      logger.info('Symptoms analyzed by ML (Ensemble + SHAP)', {
+        patientId: request.patient_id,
+        disease: response.data.disease,
+        confidence: response.data.confidence,
+        urgencyLevel: response.data.urgency_level,
+        hasExplanation: !!response.data.explanation
+      });
+
+      return response.data;
+    } catch (error: any) {
+      logger.error('ML Symptom Analysis Failed', {
+        patientId: request.patient_id,
+        error: error.message
+      });
+
+      if (error.response?.status === 503) {
+        throw new AppError('Servicio de IA temporalmente no disponible', 503);
+      } else if (error.response?.status === 400) {
+        throw new AppError('Datos de síntomas inválidos para análisis ML', 400);
+      } else {
+        throw new AppError('Error interno del servicio de IA', 500);
+      }
+    }
+  }
+
+  /**
+   * Get symptom trends for a patient
+   */
+  async getSymptomTrends(patientId: string, period: string = '30d'): Promise<any> {
+    try {
+      await this.ensureConnected();
+
+      const response = await this.aiClient.get(
+        `/api/v1/symptom-analyzer/trends/${patientId}?period=${period}`
+      );
+
+      logger.info('Symptom trends retrieved', {
+        patientId,
+        period,
+        dataPoints: response.data.trend_data?.length || 0
+      });
+
+      return response.data;
+    } catch (error: any) {
+      logger.error('AI Symptom Trends Failed', {
+        patientId,
+        error: error.message
+      });
+
+      if (error.response?.status === 404) {
+        throw new AppError('No se encontraron tendencias para el paciente', 404);
+      } else {
+        throw new AppError('Error al obtener tendencias de síntomas', 500);
+      }
+    }
+  }
+
+  /**
+   * Get general symptom recommendations
+   */
+  async getGeneralRecommendations(): Promise<Record<string, string[]>> {
+    try {
+      await this.ensureConnected();
+
+      const response = await this.aiClient.get('/api/v1/symptom-analyzer/recommendations');
+      return response.data;
+    } catch (error: any) {
+      logger.error('AI General Recommendations Failed', error);
+      throw new AppError('Error al obtener recomendaciones generales', 500);
+    }
+  }
+
+  /**
+   * Search medical histories with AI
+   */
+  async searchMedicalHistories(searchParams: {
+    patient_id?: string;
+    date_from?: string;
+    date_to?: string;
+    diagnosis?: string;
+    symptoms?: string[];
+    limit?: number;
+  }): Promise<AIAnalysisResponse[]> {
+    try {
+      await this.ensureConnected();
+
+      const response = await this.aiClient.post('/api/v1/medical-history/search', searchParams);
+      return response.data;
+    } catch (error: any) {
+      logger.error('AI Medical History Search Failed', {
+        searchParams,
+        error: error.message
+      });
+      throw new AppError('Error en búsqueda de historias médicas', 500);
+    }
+  }
+
+  // Obtiene métricas agregadas de monitoreo del modelo ML (RF-006) para el
+  // panel de analítica, desenvolviendo el wrapper {success, data} del ai-service.
+  async getMlMonitoringMetrics(params?: { days?: number }) {
+    try {
+      const response = await this.aiClient.get('/api/v1/ml/monitoring/metrics', {
+        params,
+      });
+      // AI service returns {success: true, data: {...}}, extract only data
+      const result = response.data;
+      logger.debug('AI Service Response', { 
+        hasData: !!result, 
+        hasNestedData: !!(result?.data),
+        resultKeys: result ? Object.keys(result) : []
+      });
+      
+      // Extract data from {success: true, data: {...}} structure
+      if (result && typeof result === 'object') {
+        // If it has the expected structure, extract data
+        if ('data' in result && result.success === true) {
+          return result.data;
+        }
+        // If result itself is the data (no wrapper), return it
+        if (!('success' in result) && !('data' in result)) {
+          return result;
+        }
+      }
+      // Fallback: return empty object
+      return result || {};
+    } catch (error: any) {
+      logger.error('AI ML Monitoring Metrics Failed', { error: error.message });
+      throw new AppError('Error al obtener métricas de monitoreo ML', 500);
+    }
+  }
+
+  // Obtiene la influencia de features (SHAP) más relevantes del modelo (RF-006).
+  async getMlFeatureInfluence(params?: { top_n?: number }) {
+    try {
+      const response = await this.aiClient.get('/api/v1/ml/monitoring/features', {
+        params,
+      });
+      // AI service returns {success: true, data: {...}}, extract only data
+      const result = response.data;
+      if (result && typeof result === 'object' && 'data' in result && result.success) {
+        return result.data;
+      }
+      // Fallback: if structure is different, return as is
+      return result || {};
+    } catch (error: any) {
+      logger.error('AI Feature Influence Fetch Failed', { error: error.message });
+      throw new AppError('Error al obtener contribuciones SHAP', 500);
+    }
+  }
+
+  // Obtiene métricas de equidad (fairness) del modelo ML entre grupos poblacionales.
+  async getMlFairnessMetrics(params?: { group_field?: string; high_confidence_threshold?: number }) {
+    try {
+      const response = await this.aiClient.get('/api/v1/ml/monitoring/fairness', {
+        params,
+      });
+      // AI service returns {success: true, data: {...}}, extract only data
+      const result = response.data;
+      if (result && typeof result === 'object' && 'data' in result && result.success) {
+        return result.data;
+      }
+      // Fallback: if structure is different, return as is
+      return result || {};
+    } catch (error: any) {
+      logger.error('AI Fairness Metrics Fetch Failed', { error: error.message });
+      throw new AppError('Error al obtener métricas de equidad ML', 500);
+    }
+  }
+
+  /**
+   * Get AI service status
+   */
+  async getServiceStatus(): Promise<{
+    connected: boolean;
+    lastCheck: Date;
+    responseTime?: number;
+  }> {
+    const startTime = Date.now();
+    const connected = await this.checkHealth();
+    const responseTime = Date.now() - startTime;
+
+    return {
+      connected,
+      lastCheck: new Date(),
+      responseTime: connected ? responseTime : undefined
+    };
+  }
+}
+
+// Export singleton instance
+export const aiIntegrationService = new AIIntegrationService();
+export default aiIntegrationService;

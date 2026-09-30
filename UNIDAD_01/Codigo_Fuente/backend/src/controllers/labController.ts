@@ -1,0 +1,518 @@
+import { Request, Response } from 'express';
+import { asyncHandler } from '../utils/asyncHandler';
+import { AppError } from '../utils/AppError';
+import { AuthenticatedRequest } from '../types';
+import { labService } from '../services/labService';
+import { LabResult } from '../models/LabResult';
+import { logger } from '../utils/logger';
+import { requirePermission } from '../middleware/rbac';
+
+/**
+ * Controlador para gestión de resultados de laboratorio
+ * Proporciona endpoints para visualización, historial y gestión
+ */
+
+/**
+ * LabResult no tiene un campo doctorId (ver modelo), así que solo se puede
+ * acotar el acceso de pacientes a sus propios resultados; los doctores quedan
+ * sin restricción de ownership hasta que exista un modelo de asignación
+ * doctor-paciente. Limitación conocida y documentada, no un descuido.
+ */
+function ensurePatientAccess(req: AuthenticatedRequest, patientId: string): void {
+  if (req.user?.role === 'patient' && patientId !== req.user._id?.toString()) {
+    throw new AppError('No tiene acceso a los resultados de este paciente', 403);
+  }
+}
+
+/**
+ * GET /api/v1/lab/results
+ * Obtener resultados de laboratorio con filtros
+ */
+export const getLabResults = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const {
+      patientId,
+      testCode,
+      status,
+      flagged,
+      startDate,
+      endDate,
+      laboratoryId,
+    } = req.query;
+
+    try {
+      let parsedStartDate: Date | undefined;
+      let parsedEndDate: Date | undefined;
+      if (startDate) {
+        parsedStartDate = new Date(startDate as string);
+        if (isNaN(parsedStartDate.getTime())) throw new AppError('startDate no es una fecha válida', 400);
+      }
+      if (endDate) {
+        parsedEndDate = new Date(endDate as string);
+        if (isNaN(parsedEndDate.getTime())) throw new AppError('endDate no es una fecha válida', 400);
+      }
+
+      // Un paciente solo puede consultar sus propios resultados: si no manda
+      // patientId no se le devuelve el listado completo, y si manda uno ajeno
+      // se rechaza en vez de ignorarlo silenciosamente.
+      let effectivePatientId = patientId as string | undefined;
+      if (req.user?.role === 'patient') {
+        ensurePatientAccess(req, effectivePatientId ?? req.user._id!.toString());
+        effectivePatientId = req.user._id!.toString();
+      }
+
+      const results = await labService.getResults({
+        patientId: effectivePatientId,
+        testCode: testCode as string | undefined,
+        status: status as 'normal' | 'abnormal' | 'critical' | undefined,
+        flagged: flagged === 'true' ? true : flagged === 'false' ? false : undefined,
+        startDate: parsedStartDate,
+        endDate: parsedEndDate,
+        laboratoryId: laboratoryId as string | undefined,
+      });
+
+      logger.info(`Resultados de laboratorio obtenidos`, {
+        userId: req.user?._id,
+        count: results.length,
+        filters: req.query,
+      });
+
+      res.status(200).json({
+        success: true,
+        data: results,
+        meta: {
+          count: results.length,
+        },
+      });
+    } catch (error: any) {
+      logger.error(`Error al obtener resultados: ${error.message}`, {
+        userId: req.user?._id,
+        error: error.message,
+      });
+      throw error;
+    }
+  },
+);
+
+/**
+ * GET /api/v1/lab/results/:patientId/history
+ * Obtener historial de exámenes de un paciente
+ */
+export const getPatientHistory = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { patientId } = req.params;
+    const { startDate, endDate } = req.query;
+
+    if (!patientId) {
+      throw new AppError('patientId es requerido', 400);
+    }
+
+    ensurePatientAccess(req, patientId);
+
+    try {
+      const history = await labService.getPatientHistory(
+        patientId,
+        startDate ? new Date(startDate as string) : undefined,
+        endDate ? new Date(endDate as string) : undefined,
+      );
+
+      logger.info(`Historial de laboratorio obtenido`, {
+        userId: req.user?._id,
+        patientId,
+        count: history.length,
+      });
+
+      res.status(200).json({
+        success: true,
+        data: history,
+        meta: {
+          patientId,
+          count: history.length,
+        },
+      });
+    } catch (error: any) {
+      logger.error(`Error al obtener historial: ${error.message}`, {
+        userId: req.user?._id,
+        patientId,
+        error: error.message,
+      });
+      throw error;
+    }
+  },
+);
+
+/**
+ * GET /api/v1/lab/results/:patientId/abnormal
+ * Obtener resultados anormales de un paciente
+ */
+export const getAbnormalResults = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { patientId } = req.params;
+    const { startDate, endDate } = req.query;
+
+    if (!patientId) {
+      throw new AppError('patientId es requerido', 400);
+    }
+
+    ensurePatientAccess(req, patientId);
+
+    try {
+      const results = await labService.getAbnormalResults(
+        patientId,
+        startDate ? new Date(startDate as string) : undefined,
+        endDate ? new Date(endDate as string) : undefined,
+      );
+
+      logger.info(`Resultados anormales obtenidos`, {
+        userId: req.user?._id,
+        patientId,
+        count: results.length,
+      });
+
+      res.status(200).json({
+        success: true,
+        data: results,
+        meta: {
+          patientId,
+          count: results.length,
+          critical: results.filter((r) => r.status === 'critical').length,
+          abnormal: results.filter((r) => r.status === 'abnormal').length,
+        },
+      });
+    } catch (error: any) {
+      logger.error(`Error al obtener resultados anormales: ${error.message}`, {
+        userId: req.user?._id,
+        patientId,
+        error: error.message,
+      });
+      throw error;
+    }
+  },
+);
+
+/**
+ * GET /api/v1/lab/results/:patientId/critical
+ * Obtener resultados críticos de un paciente
+ */
+export const getCriticalResults = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { patientId } = req.params;
+    const { startDate, endDate } = req.query;
+
+    if (!patientId) {
+      throw new AppError('patientId es requerido', 400);
+    }
+
+    ensurePatientAccess(req, patientId);
+
+    try {
+      const results = await labService.getCriticalResults(
+        patientId,
+        startDate ? new Date(startDate as string) : undefined,
+        endDate ? new Date(endDate as string) : undefined,
+      );
+
+      logger.info(`Resultados críticos obtenidos`, {
+        userId: req.user?._id,
+        patientId,
+        count: results.length,
+      });
+
+      res.status(200).json({
+        success: true,
+        data: results,
+        meta: {
+          patientId,
+          count: results.length,
+        },
+      });
+    } catch (error: any) {
+      logger.error(`Error al obtener resultados críticos: ${error.message}`, {
+        userId: req.user?._id,
+        patientId,
+        error: error.message,
+      });
+      throw error;
+    }
+  },
+);
+
+/**
+ * GET /api/v1/lab/results/abnormal
+ * Listar resultados anormales (todos los pacientes)
+ */
+export const listAbnormalResults = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { startDate, endDate } = req.query;
+    const results = await labService.getAbnormalResults(
+      undefined,
+      startDate ? new Date(startDate as string) : undefined,
+      endDate ? new Date(endDate as string) : undefined,
+    );
+    res.status(200).json({
+      success: true,
+      data: results,
+      meta: {
+        count: results.length,
+        critical: results.filter((r) => r.status === 'critical').length,
+        abnormal: results.filter((r) => r.status === 'abnormal').length,
+      },
+    });
+  },
+);
+
+/**
+ * GET /api/v1/lab/results/critical
+ * Listar resultados críticos (todos los pacientes, solo admin)
+ */
+export const listCriticalResults = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { startDate, endDate } = req.query;
+    const results = await labService.getCriticalResults(
+      undefined,
+      startDate ? new Date(startDate as string) : undefined,
+      endDate ? new Date(endDate as string) : undefined,
+    );
+    res.status(200).json({
+      success: true,
+      data: results,
+      meta: { count: results.length },
+    });
+  },
+);
+
+/**
+ * GET /api/v1/lab/results/:patientId/latest/:testCode
+ * Obtener último resultado de un examen específico
+ */
+export const getLatestResult = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { patientId, testCode } = req.params;
+
+    if (!patientId || !testCode) {
+      throw new AppError('patientId y testCode son requeridos', 400);
+    }
+
+    ensurePatientAccess(req, patientId);
+
+    try {
+      const result = await labService.getLatestResult(patientId, testCode);
+
+      if (!result) {
+        throw new AppError(`No se encontró resultado para ${testCode}`, 404);
+      }
+
+      res.status(200).json({
+        success: true,
+        data: result,
+      });
+    } catch (error: any) {
+      logger.error(`Error al obtener último resultado: ${error.message}`, {
+        userId: req.user?._id,
+        patientId,
+        testCode,
+        error: error.message,
+      });
+      throw error;
+    }
+  },
+);
+
+/**
+ * GET /api/v1/lab/results/:patientId/summary
+ * Obtener resumen de resultados de un paciente
+ */
+export const getPatientSummary = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { patientId } = req.params;
+    const { startDate, endDate } = req.query;
+
+    if (!patientId) {
+      throw new AppError('patientId es requerido', 400);
+    }
+
+    ensurePatientAccess(req, patientId);
+
+    try {
+      const summary = await labService.getPatientSummary(
+        patientId,
+        startDate ? new Date(startDate as string) : undefined,
+        endDate ? new Date(endDate as string) : undefined,
+      );
+
+      res.status(200).json({
+        success: true,
+        data: summary,
+      });
+    } catch (error: any) {
+      logger.error(`Error al obtener resumen: ${error.message}`, {
+        userId: req.user?._id,
+        patientId,
+        error: error.message,
+      });
+      throw error;
+    }
+  },
+);
+
+/**
+ * POST /api/v1/lab/results/:resultId/review
+ * Marcar resultado como revisado
+ */
+export const markAsReviewed = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { resultId } = req.params;
+
+    if (!resultId) {
+      throw new AppError('resultId es requerido', 400);
+    }
+
+    if (!req.user?._id) {
+      throw new AppError('Usuario no autenticado', 401);
+    }
+
+    try {
+      await labService.markAsReviewed(resultId, req.user._id.toString());
+
+      logger.info(`Resultado marcado como revisado`, {
+        userId: req.user._id,
+        resultId,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: 'Resultado marcado como revisado',
+      });
+    } catch (error: any) {
+      logger.error(`Error al marcar como revisado: ${error.message}`, {
+        userId: req.user?._id,
+        resultId,
+        error: error.message,
+      });
+      throw error;
+    }
+  },
+);
+
+/**
+ * POST /api/v1/lab/results/:resultId/flag
+ * Marcar resultado para revisión
+ */
+export const flagForReview = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { resultId } = req.params;
+    const { reason } = req.body;
+
+    if (!resultId) {
+      throw new AppError('resultId es requerido', 400);
+    }
+
+    try {
+      await labService.flagForReview(resultId, reason);
+
+      logger.info(`Resultado marcado para revisión`, {
+        userId: req.user?._id,
+        resultId,
+        reason,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: 'Resultado marcado para revisión',
+      });
+    } catch (error: any) {
+      logger.error(`Error al marcar para revisión: ${error.message}`, {
+        userId: req.user?._id,
+        resultId,
+        error: error.message,
+      });
+      throw error;
+    }
+  },
+);
+
+/**
+ * POST /api/v1/lab/results/import (variante externa)
+ * Importar y guardar resultados desde sistema externo para un paciente.
+ * Body: { patientId, startDate?, endDate? }
+ */
+export const importAndSaveResults = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { patientId, startDate, endDate } = req.body;
+
+    if (!patientId) {
+      throw new AppError('patientId es requerido', 400);
+    }
+
+    try {
+      const result = await labService.importAndSaveResults(
+        patientId,
+        startDate ? new Date(startDate) : undefined,
+        endDate ? new Date(endDate) : undefined,
+      );
+
+      logger.info(`Importación automática completada`, {
+        userId: req.user?._id,
+        patientId,
+        imported: result.imported,
+        saved: result.saved,
+        errors: result.errors,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: 'Importación completada',
+        data: result,
+      });
+    } catch (error: any) {
+      logger.error(`Error en importación automática: ${error.message}`, {
+        userId: req.user?._id,
+        patientId,
+        error: error.message,
+      });
+      throw error;
+    }
+  },
+);
+
+/**
+ * POST /api/v1/lab/results/import
+ * Importar (bulk insert) resultados de laboratorio ya formateados o disparar
+ * importación externa para un paciente. Discriminates on payload shape.
+ */
+export const bulkImportResults = asyncHandler(
+  async (req: AuthenticatedRequest, res: Response) => {
+    const { results } = req.body;
+
+    if (!Array.isArray(results) || results.length === 0) {
+      throw new AppError('results debe ser un array con al menos un elemento', 400);
+    }
+
+    try {
+      const saved = await LabResult.insertMany(results, { ordered: false });
+
+      logger.info(`Importación de resultados de laboratorio completada`, {
+        userId: req.user?._id,
+        imported: results.length,
+        saved: saved.length,
+      });
+
+      res.status(201).json({
+        success: true,
+        message: 'Importación completada',
+        data: saved,
+        meta: {
+          imported: results.length,
+          saved: saved.length,
+        },
+      });
+    } catch (error: any) {
+      logger.error(`Error en importación de laboratorio: ${error.message}`, {
+        userId: req.user?._id,
+        error: error.message,
+      });
+      throw error;
+    }
+  },
+);
+

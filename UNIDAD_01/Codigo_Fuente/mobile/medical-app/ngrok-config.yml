@@ -1,0 +1,12 @@
+version: "2"
+authtoken: ${NGROK_AUTHTOKEN}
+tunnels:
+  backend:
+    addr: 3001
+    proto: http
+    bind_tls: true
+  ai-services:
+    addr: 8000
+    proto: http
+    bind_tls: true
+
