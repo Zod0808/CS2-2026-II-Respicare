@@ -31,14 +31,20 @@ CS2-2026-II-Respicare/
 │   ├── Plan_Iteracion/
 │   ├── Laboratorios_Evidencias/
 │   └── Codigo_Fuente/             # Código fuente completo del proyecto RespiCare
-├── UNIDAD_02/                     # Se definirá progresivamente según el avance del curso
+├── UNIDAD_02/                     # Calidad, Calendarización, Plan de Despliegue, Documento de Configuración de Software, Plan de Pruebas
+│   ├── Calidad/
+│   ├── Calendarizacion/
+│   ├── Plan_Despliegue/
+│   ├── Documento_Configuracion_Software/
+│   └── Plan_Pruebas/
 ├── UNIDAD_03/                     # Se definirá progresivamente según el avance del curso
 └── Laboratorio_Instrucciones/     # Enunciado del laboratorio y formato de informe de uso de GitHub
 ```
 
 - **UNIDAD_01** contiene la estructura de ejemplo solicitada: revisión de código, especificaciones funcionales, casos de prueba/catálogo de pruebas, plan de iteración, laboratorios con sus evidencias, y el código fuente del proyecto.
-- **UNIDAD_02** y **UNIDAD_03** se completarán progresivamente conforme el docente indique los temas, actividades y entregables correspondientes.
-- Cada subcarpeta de `UNIDAD_01` incluye un `README.md` que enlaza a los documentos y/o rutas de código correspondientes dentro de `Codigo_Fuente/`, evitando duplicar archivos.
+- **UNIDAD_02** cubre los temas indicados por el docente para la segunda unidad: calidad, calendarización, plan de despliegue, documento de configuración de software y plan de pruebas.
+- **UNIDAD_03** se completará progresivamente conforme el docente indique los temas, actividades y entregables correspondientes.
+- Cada subcarpeta de `UNIDAD_01` y `UNIDAD_02` incluye un `README.md` que enlaza a los documentos y/o rutas de código correspondientes dentro de `Codigo_Fuente/`, evitando duplicar archivos.
 
 ## Proyecto base: RespiCare
 
